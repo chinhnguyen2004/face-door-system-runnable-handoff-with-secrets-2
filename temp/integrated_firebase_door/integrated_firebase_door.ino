@@ -133,12 +133,23 @@ void connectWiFi() {
 void setupFirebase() {
   config.database_url = DATABASE_URL;
   config.signer.tokens.legacy_token = DATABASE_SECRET;
+  
+  // Giới hạn kích thước bộ đệm phản hồi để giải phóng RAM cho kết nối SSL
+  fbdo.setResponseSize(512);
+
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
 
   Firebase.RTDB.setBool(&fbdo, doorPath.c_str(), false);
   Firebase.RTDB.setString(&fbdo, messagePath.c_str(), "ESP online");
   Firebase.RTDB.setBool(&fbdo, capturePath.c_str(), false);
+  
+  // Đọc timestamp hiện tại để tránh nhận diện nhầm kết quả cũ khi vừa khởi động
+  if (Firebase.RTDB.getInt(&fbdo, resultTimePath.c_str())) {
+    lastResultTimestamp = fbdo.intData();
+    Serial.print("Initial result timestamp: ");
+    Serial.println(lastResultTimestamp);
+  }
 }
 
 float readDistanceCM() {
@@ -155,7 +166,12 @@ float readDistanceCM() {
 
 void openDoor() {
   if (!doorOpen) {
+    // Chỉ attach khi cần quay để tránh nhiễu/quay liên tục do SSL
+    doorServo.attach(SERVO_PIN);
     doorServo.write(SERVO_OPEN_DEG);
+    delay(600); // Đợi servo quay xong
+    doorServo.detach(); // Detach ngay để triệt tiêu tiếng rung/nhiễu
+    
     doorOpen = true;
     doorOpenedMs = millis();
     Firebase.RTDB.setBool(&fbdo, doorPath.c_str(), true);
@@ -172,7 +188,12 @@ void openDoor() {
 
 void closeDoor() {
   if (doorOpen) {
+    // Chỉ attach khi cần quay để tránh nhiễu/quay liên tục do SSL
+    doorServo.attach(SERVO_PIN);
     doorServo.write(SERVO_CLOSED_DEG);
+    delay(600); // Đợi servo quay xong
+    doorServo.detach(); // Detach ngay để triệt tiêu tiếng rung/nhiễu
+    
     doorOpen = false;
     Firebase.RTDB.setBool(&fbdo, doorPath.c_str(), false);
     Firebase.RTDB.setString(&fbdo, messagePath.c_str(), "Door closed");
@@ -207,8 +228,6 @@ void requestCaptureIfNeeded() {
 }
 
 void checkRecognitionResult() {
-  if (!captureRequested) return;
-
   if (Firebase.RTDB.getInt(&fbdo, resultTimePath.c_str())) {
     int ts = fbdo.intData();
     if (ts != lastResultTimestamp) {
@@ -263,8 +282,11 @@ void setup() {
   digitalWrite(LED_SUCCESS_PIN, LOW);
   digitalWrite(LED_FAIL_PIN, LOW);
 
+  // Đặt vị trí ban đầu cho servo và giải phóng
   doorServo.attach(SERVO_PIN);
   doorServo.write(SERVO_CLOSED_DEG);
+  delay(600);
+  doorServo.detach();
 
   setupLCD();
   connectWiFi();

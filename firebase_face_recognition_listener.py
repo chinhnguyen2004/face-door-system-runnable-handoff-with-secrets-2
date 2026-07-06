@@ -434,6 +434,12 @@ def main() -> None:
         window_name = "Face Door - Standalone"
         last_result_time = 0.0
         flag_ref = db.reference("/capture_request")
+        
+        # Accumulators for standalone voting
+        standalone_votes = []
+        standalone_scores = []
+        last_face_seen_time = time.time()
+        
         try:
             while True:
                 ret, frame = cap.read()
@@ -457,6 +463,7 @@ def main() -> None:
                     largest_face = faces_list[0]
 
                 if largest_face is not None:
+                    last_face_seen_time = now
                     # Align and match
                     aligned = recognizer.alignCrop(frame, largest_face)
                     feat = recognizer.feature(aligned)
@@ -475,33 +482,52 @@ def main() -> None:
 
                     is_known = best_score >= args.threshold
                     if is_known:
+                        vote_value = json.dumps(best_profile, ensure_ascii=False, sort_keys=True)
                         label_text = f"{best_name} ({best_score:.2f})"
                         box_color = (0, 220, 0)
-                        if cooldown_ok:
-                            write_result(best_profile, float(best_score), 1, "standalone",
-                                         args.discord_webhook, args.notify_known, not args.no_sound)
-                            flag_ref.set(False)
-                            last_result_time = now
-                            print(f"[STANDALONE] Recognized: {label_text}")
                     else:
+                        vote_value = "Unknown"
                         label_text = f"Unknown ({best_score:.2f})"
                         box_color = (0, 0, 255)
-                        if cooldown_ok:
-                            write_result({"name": "Unknown", "student_id": ""}, float(best_score), 1, "standalone",
+
+                    if cooldown_ok:
+                        standalone_votes.append(vote_value)
+                        standalone_scores.append(float(best_score))
+                        print(f"[STANDALONE] Got face frame {len(standalone_votes)}/{args.frames}: {label_text}")
+                        
+                        if len(standalone_votes) >= args.frames:
+                            # Vote
+                            winner = Counter(standalone_votes).most_common(1)[0][0]
+                            final_profile = {"name": "Unknown", "student_id": ""} if winner == "Unknown" else json.loads(winner)
+                            avg_score = sum(standalone_scores) / len(standalone_scores)
+                            
+                            write_result(final_profile, avg_score, len(standalone_votes), "standalone",
                                          args.discord_webhook, args.notify_known, not args.no_sound)
+                            
+                            print(f"[STANDALONE] Recognized: {final_profile['name']} with score {avg_score:.2f} (Voted {len(standalone_votes)} frames)")
+                            
+                            # Clear accumulators and start cooldown
+                            standalone_votes.clear()
+                            standalone_scores.clear()
                             last_result_time = now
-                            print(f"[STANDALONE] Recognized Unknown")
+                            flag_ref.set(False)
 
                     x, y, fw, fh = map(int, largest_face[0:4])
                     cv2.rectangle(display, (x, y), (x+fw, y+fh), box_color, 2)
                     cv2.putText(display, label_text, (x, max(30, y-10)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2)
                 else:
+                    # Reset standalone votes if no face is seen for 2 seconds to avoid mixing old votes with a new person
+                    if now - last_face_seen_time > 2.0 and standalone_votes:
+                        print("[STANDALONE] Face lost for 2s. Resetting votes accumulator.")
+                        standalone_votes.clear()
+                        standalone_scores.clear()
+
                     cv2.putText(display, "No face detected", (20, 40),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 180, 255), 2)
 
                 remaining_cd = max(0.0, args.cooldown - (now - last_result_time))
-                cv2.putText(display, f"Cooldown: {remaining_cd:.1f}s" if remaining_cd > 0 else "Ready",
+                cv2.putText(display, f"Cooldown: {remaining_cd:.1f}s" if remaining_cd > 0 else f"Ready (Accumulated: {len(standalone_votes)}/{args.frames})",
                             (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
                 cv2.imshow(window_name, display)
                 if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
