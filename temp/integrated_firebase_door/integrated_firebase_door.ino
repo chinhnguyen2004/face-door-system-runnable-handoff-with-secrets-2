@@ -1,4 +1,4 @@
-﻿/*
+/*
   Integrated ESP8266 door firmware
 
   Current hardware mapping:
@@ -41,6 +41,8 @@ const uint8_t LCD_SDA_PIN = D2;
 const uint8_t TRIG_PIN    = D5;
 const uint8_t ECHO_PIN    = D6;
 const uint8_t SERVO_PIN   = D0;
+const uint8_t LED_SUCCESS_PIN = D3; // Đèn sáng khi đúng MSV (D3)
+const uint8_t LED_FAIL_PIN    = D4; // Đèn sáng khi không phải (D4)
 
 // Behavior config
 const String DEVICE_ID = "esp01";
@@ -161,6 +163,10 @@ void openDoor() {
     lcdLine(0, "Access OK");
     lcdLine(1, "Door opened");
     Serial.println("Door opened");
+    
+    // Bật đèn xanh D3, tắt đèn đỏ D4
+    digitalWrite(LED_SUCCESS_PIN, HIGH);
+    digitalWrite(LED_FAIL_PIN, LOW);
   }
 }
 
@@ -174,12 +180,15 @@ void closeDoor() {
     lcdLine(1, "Waiting");
     Serial.println("Door closed");
   }
+  // Tắt đèn xanh D3 khi đóng cửa
+  digitalWrite(LED_SUCCESS_PIN, LOW);
 }
 
 bool isAuthorizedResult(String result) {
   result.trim();
   result.toLowerCase();
-  return result == "quan" || result == "tuan anh" || result == "known" || result == "test_ok";
+  // Chấp nhận mọi kết quả nhận diện thành công (không phải unknown, failed hoặc rỗng)
+  return result != "" && result != "unknown" && result != "waiting" && result != "failed";
 }
 
 void requestCaptureIfNeeded() {
@@ -191,6 +200,10 @@ void requestCaptureIfNeeded() {
   lcdLine(0, "Person detected");
   lcdLine(1, "Face scan...");
   Serial.println("capture_request=true");
+  
+  // Tắt cả hai đèn khi bắt đầu lượt quét mới
+  digitalWrite(LED_SUCCESS_PIN, LOW);
+  digitalWrite(LED_FAIL_PIN, LOW);
 }
 
 void checkRecognitionResult() {
@@ -215,6 +228,10 @@ void checkRecognitionResult() {
           Firebase.RTDB.setString(&fbdo, messagePath.c_str(), "Access denied: " + result);
           lcdLine(0, "Access denied");
           lcdLine(1, result);
+          
+          // Bật đèn đỏ D4 báo sai, tắt đèn xanh D3
+          digitalWrite(LED_SUCCESS_PIN, LOW);
+          digitalWrite(LED_FAIL_PIN, HIGH);
         }
       }
     }
@@ -239,6 +256,12 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   digitalWrite(TRIG_PIN, LOW);
+  
+  // Cấu hình chân đèn LED D3 và D4
+  pinMode(LED_SUCCESS_PIN, OUTPUT);
+  pinMode(LED_FAIL_PIN, OUTPUT);
+  digitalWrite(LED_SUCCESS_PIN, LOW);
+  digitalWrite(LED_FAIL_PIN, LOW);
 
   doorServo.attach(SERVO_PIN);
   doorServo.write(SERVO_CLOSED_DEG);
