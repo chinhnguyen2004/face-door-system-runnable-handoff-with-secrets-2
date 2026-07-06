@@ -75,6 +75,20 @@ class FirebaseRESTReference:
             print(f"Firebase REST UPDATE error: {e}")
             return None
 
+    def push(self, value):
+        url = f"{self.database_url}/{self.path}.json?auth={self.secret}"
+        try:
+            r = requests.post(url, json=value, timeout=5)
+            r.raise_for_status()
+            class PushResult:
+                def __init__(self, key):
+                    self.key = key
+            res = r.json()
+            return PushResult(res.get("name", ""))
+        except Exception as e:
+            print(f"Firebase REST PUSH error: {e}")
+            return None
+
 class FirebaseREST:
     def __init__(self, database_url: str, secret: str):
         self.database_url = database_url
