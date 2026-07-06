@@ -194,3 +194,7 @@ def main() -> None:
     cap.release()
     cv2.destroyAllWindows()
     print(f"\nDone! Saved {saved} new aligned images for {name} ({student_id})")
+
+
+if __name__ == "__main__":
+    main()
