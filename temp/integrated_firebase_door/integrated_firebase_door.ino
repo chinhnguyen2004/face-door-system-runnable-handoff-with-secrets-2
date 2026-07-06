@@ -41,8 +41,8 @@ const uint8_t LCD_SDA_PIN = D2;
 const uint8_t TRIG_PIN    = D5;
 const uint8_t ECHO_PIN    = D6;
 const uint8_t SERVO_PIN   = D0;
-const uint8_t LED_SUCCESS_PIN = D3; // Đèn sáng khi đúng MSV (D3)
-const uint8_t LED_FAIL_PIN    = D4; // Đèn sáng khi không phải (D4)
+const uint8_t LED_SUCCESS_PIN = D4; // Đèn trắng sáng khi đúng MSV (D4)
+const uint8_t LED_FAIL_PIN    = D3; // Đèn đỏ sáng khi không phải/unknown (D3)
 
 // Behavior config
 const String DEVICE_ID = "esp01";
