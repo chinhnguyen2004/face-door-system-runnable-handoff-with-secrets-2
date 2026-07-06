@@ -487,7 +487,7 @@ def main() -> None:
                         label_text = f"Unknown ({best_score:.2f})"
                         box_color = (0, 0, 255)
                         if cooldown_ok:
-                            write_result(best_profile, float(best_score), 1, "standalone",
+                            write_result({"name": "Unknown", "student_id": ""}, float(best_score), 1, "standalone",
                                          args.discord_webhook, args.notify_known, not args.no_sound)
                             last_result_time = now
                             print(f"[STANDALONE] Recognized Unknown")
