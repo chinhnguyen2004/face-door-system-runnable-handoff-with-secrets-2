@@ -31,14 +31,59 @@ from pathlib import Path
 from typing import Iterable
 
 import cv2
-import firebase_admin
 import numpy as np
-from firebase_admin import credentials, db
+import requests
 
 PROJECT_DIR = Path(__file__).resolve().parent
-SERVICE_ACCOUNT_PATH = PROJECT_DIR / "admin_firebase.json"
 DATABASE_URL = "https://face-f49c1-default-rtdb.asia-southeast1.firebasedatabase.app/"
+DATABASE_SECRET = "PbP55oc3DIyh6VQCZ2LqJi2q8WpRib33nVbzbTSV"
 DEVICE_ID = "esp01"
+
+class FirebaseRESTReference:
+    def __init__(self, path: str, database_url: str, secret: str):
+        self.path = path.strip('/')
+        self.database_url = database_url.rstrip('/')
+        self.secret = secret
+
+    def get(self):
+        url = f"{self.database_url}/{self.path}.json?auth={self.secret}"
+        try:
+            r = requests.get(url, timeout=5)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"Firebase REST GET error: {e}")
+            return None
+
+    def set(self, value):
+        url = f"{self.database_url}/{self.path}.json?auth={self.secret}"
+        try:
+            r = requests.put(url, json=value, timeout=5)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"Firebase REST SET error: {e}")
+            return None
+
+    def update(self, value):
+        url = f"{self.database_url}/{self.path}.json?auth={self.secret}"
+        try:
+            r = requests.patch(url, json=value, timeout=5)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            print(f"Firebase REST UPDATE error: {e}")
+            return None
+
+class FirebaseREST:
+    def __init__(self, database_url: str, secret: str):
+        self.database_url = database_url
+        self.secret = secret
+
+    def reference(self, path: str):
+        return FirebaseRESTReference(path, self.database_url, self.secret)
+
+db = FirebaseREST(DATABASE_URL, DATABASE_SECRET)
 
 DEFAULT_DATA_DIR = PROJECT_DIR / "known_faces"
 MODELS_DIR = PROJECT_DIR / "models"
@@ -70,11 +115,7 @@ def check_and_download_models() -> tuple[Path, Path]:
 
 
 def init_firebase() -> None:
-    if not SERVICE_ACCOUNT_PATH.exists():
-        raise FileNotFoundError(f"Missing Admin SDK JSON: {SERVICE_ACCOUNT_PATH}")
-    if not firebase_admin._apps:
-        cred = credentials.Certificate(str(SERVICE_ACCOUNT_PATH))
-        firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})
+    pass
 
 
 def load_database() -> list[dict]:
