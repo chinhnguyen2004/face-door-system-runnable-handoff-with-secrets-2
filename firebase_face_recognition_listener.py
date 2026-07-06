@@ -1,5 +1,5 @@
 """
-Firebase-triggered face recognition listener.
+Firebase-triggered face recognition listener using YuNet + SFace.
 
 Flow:
   1. Wait for /capture_request == true
@@ -7,13 +7,9 @@ Flow:
   3. Write result to /recognitions/esp01 and /history
   4. Reset /capture_request = false
 
-Default model behavior:
-  - If known_faces/<person_name> images exist, train an LBPH model from them.
-  - Else if lbph_model.xml exists in the project root, load it and use default labels.
-
-Recommended folder layout for training:
+Recommended folder layout:
   known_faces/
-    B21DCCN001__Nguyen Van A/profile.json + *.jpg
+    <MSV>__<name>/profile.json + *.jpg (aligned color faces)
 
 Run:
   python firebase_face_recognition_listener.py
@@ -26,6 +22,7 @@ import json
 import os
 import threading
 import time
+import urllib.request
 from datetime import datetime
 from urllib import error as urlerror
 from urllib import request
@@ -44,40 +41,32 @@ DATABASE_URL = "https://face-f49c1-default-rtdb.asia-southeast1.firebasedatabase
 DEVICE_ID = "esp01"
 
 DEFAULT_DATA_DIR = PROJECT_DIR / "known_faces"
-DEFAULT_MODEL_PATH = PROJECT_DIR / "models" / "lbph_model.xml"
-ROOT_MODEL_PATH = PROJECT_DIR / "lbph_model.xml"
-DEFAULT_LABELS_PATH = PROJECT_DIR / "models" / "labels.json"
-DEFAULT_LABELS = ["Quan", "Tuan Anh"]
+MODELS_DIR = PROJECT_DIR / "models"
+DATABASE_PATH = MODELS_DIR / "embeddings.json"
 
-FACE_SIZE = (200, 200)
-THRESHOLD = 70.0
+DEFAULT_THRESHOLD = 0.363
 CAPTURE_DURATION_SEC = 7.0
 TARGET_FACE_FRAMES = 10
 CAMERA_INDEX = 0
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL", "").strip()
 
 
-def normalize_profiles(data) -> list[dict[str, str]]:
-    return [
-        item if isinstance(item, dict) else {"name": str(item), "student_id": ""}
-        for item in data
-    ]
+def check_and_download_models() -> tuple[Path, Path]:
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    yunet_path = MODELS_DIR / "face_detection_yunet_2023mar.onnx"
+    sface_path = MODELS_DIR / "face_recognition_sface_2021dec.onnx"
 
+    if not yunet_path.exists():
+        print(f"Downloading YuNet face detector to {yunet_path}...")
+        url = "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
+        urllib.request.urlretrieve(url, str(yunet_path))
 
-def load_profile(person_dir: Path) -> dict[str, str]:
-    profile_path = person_dir / "profile.json"
-    if profile_path.exists():
-        data = json.loads(profile_path.read_text(encoding="utf-8"))
-        return {"name": str(data["name"]), "student_id": str(data["student_id"])}
-    return {"name": person_dir.name, "student_id": ""}
+    if not sface_path.exists():
+        print(f"Downloading SFace face recognizer to {sface_path}...")
+        url = "https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx"
+        urllib.request.urlretrieve(url, str(sface_path))
 
-
-def require_cv2_face() -> None:
-    if not hasattr(cv2, "face"):
-        raise RuntimeError(
-            "cv2.face is missing. Install opencv-contrib-python: "
-            "python -m pip install opencv-contrib-python"
-        )
+    return yunet_path, sface_path
 
 
 def init_firebase() -> None:
@@ -88,134 +77,20 @@ def init_firebase() -> None:
         firebase_admin.initialize_app(cred, {"databaseURL": DATABASE_URL})
 
 
-def iter_image_files(folder: Path) -> Iterable[Path]:
-    for ext in ("*.jpg", "*.jpeg", "*.png", "*.bmp"):
-        yield from folder.glob(ext)
-
-
-def detect_largest_face_box(gray: np.ndarray, cascade: cv2.CascadeClassifier):
-    faces = cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.2,
-        minNeighbors=5,
-        minSize=(80, 80),
-    )
-    if len(faces) == 0:
-        equalized = cv2.equalizeHist(gray)
-        faces = cascade.detectMultiScale(
-            equalized,
-            scaleFactor=1.1,
-            minNeighbors=4,
-            minSize=(60, 60),
+def load_database() -> list[dict]:
+    if not DATABASE_PATH.exists():
+        raise FileNotFoundError(
+            f"Database not found at {DATABASE_PATH}. "
+            "Please run train_known_faces.py first to compute embeddings."
         )
-    if len(faces) == 0:
-        return None
-    return max(faces, key=lambda rect: rect[2] * rect[3])
-
-
-def crop_face_roi(gray: np.ndarray, box) -> np.ndarray:
-    x, y, w, h = box
-    roi = gray[y : y + h, x : x + w]
-    roi = cv2.resize(roi, FACE_SIZE)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    roi = clahe.apply(roi)
-    return roi
-
-
-def detect_largest_face(gray: np.ndarray, cascade: cv2.CascadeClassifier) -> np.ndarray | None:
-    box = detect_largest_face_box(gray, cascade)
-    if box is None:
-        return None
-    return crop_face_roi(gray, box)
-
-
-def train_from_folder(data_dir: Path, cascade: cv2.CascadeClassifier):
-    labels: list[dict[str, str]] = []
-    images: list[np.ndarray] = []
-    ids: list[int] = []
-
-    if not data_dir.exists():
-        return None, []
-
-    person_dirs = [p for p in sorted(data_dir.iterdir()) if p.is_dir()]
-    for person_dir in person_dirs:
-        profile = load_profile(person_dir)
-        person_images: list[np.ndarray] = []
-        for img_path in iter_image_files(person_dir):
-            img_data = np.fromfile(str(img_path), dtype=np.uint8)
-            img = cv2.imdecode(img_data, cv2.IMREAD_GRAYSCALE) if img_data.size > 0 else None
-            if img is None:
-                continue
-            face = detect_largest_face(img, cascade)
-            if face is None:
-                face = cv2.resize(img, FACE_SIZE)
-                face = cv2.equalizeHist(face)
-            person_images.extend((face, cv2.flip(face, 1)))
-        if person_images:
-            label_id = len(labels) + 1
-            images.extend(person_images)
-            ids.extend([label_id] * len(person_images))
-            labels.append(profile)
-            print(f"Loaded {len(person_images)} training images for {profile['name']} ({profile['student_id']})")
-
-    if not images:
-        return None, []
-
-    recognizer = cv2.face.LBPHFaceRecognizer_create(radius=2, neighbors=8, grid_x=8, grid_y=8)
-    recognizer.train(images, np.array(ids))
-    DEFAULT_MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    import tempfile, shutil, os
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp:
-        tmp_model_path = tmp.name
-    recognizer.write(tmp_model_path)
-    shutil.move(tmp_model_path, str(DEFAULT_MODEL_PATH))
-    DEFAULT_LABELS_PATH.write_text(json.dumps(labels, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Trained and saved model: {DEFAULT_MODEL_PATH}")
-    return recognizer, labels
-
-
-def load_or_train_model(data_dir: Path, cascade: cv2.CascadeClassifier):
-    require_cv2_face()
-
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
-
-    import tempfile, shutil, os
-    def read_model_safe(model_path):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xml") as tmp:
-            tmp_path = tmp.name
-        shutil.copy2(str(model_path), tmp_path)
-        recognizer.read(tmp_path)
-        os.remove(tmp_path)
-
-    if DEFAULT_MODEL_PATH.exists() and DEFAULT_LABELS_PATH.exists():
-        read_model_safe(DEFAULT_MODEL_PATH)
-        labels = normalize_profiles(json.loads(DEFAULT_LABELS_PATH.read_text(encoding="utf-8")))
-        print(f"Loaded model: {DEFAULT_MODEL_PATH}")
-        return recognizer, labels
-
-    recognizer, labels = train_from_folder(data_dir, cascade)
-    if recognizer is not None:
-        return recognizer, labels
-
-    recognizer = cv2.face.LBPHFaceRecognizer_create()
-
-    if ROOT_MODEL_PATH.exists():
-        read_model_safe(ROOT_MODEL_PATH)
-        labels = normalize_profiles(DEFAULT_LABELS)
-        print(f"Loaded existing root model: {ROOT_MODEL_PATH}")
-        print(f"Using default labels: {labels}")
-        return recognizer, labels
-
-    raise RuntimeError(
-        "No training images or model found. Create known_faces/<person>/*.jpg "
-        "or place models/lbph_model.xml + models/labels.json."
-    )
+    with DATABASE_PATH.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def recognize_once(
-    recognizer,
-    labels: list[dict[str, str]],
-    cascade: cv2.CascadeClassifier,
+    detector: cv2.FaceDetectorYN,
+    recognizer: cv2.FaceRecognizerSF,
+    database: list[dict],
     camera_index: int,
     duration: float,
     threshold: float,
@@ -228,15 +103,23 @@ def recognize_once(
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open camera index {camera_index}")
 
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    # Pre-read frame to set input size
+    ret, frame = cap.read()
+    if ret:
+        h, w = frame.shape[:2]
+        detector.setInputSize((w, h))
+
     votes: list[str] = []
-    confidences: list[float] = []
+    scores: list[float] = []
     start = time.time()
 
     window_name = "Face Door Camera Preview"
-    last_preview_text = "Dang tim khuon mat..."
     print(f"Scanning for {duration:.1f}s; need {target_frames} valid face frames before decision...")
     if show_camera:
-        print("Camera preview is ON. Press q in the preview window to cancel this capture.")
+        print("Camera preview is ON. Press q in the preview window to cancel.")
 
     cancelled = False
     while time.time() - start < duration:
@@ -247,57 +130,75 @@ def recognize_once(
 
         elapsed = time.time() - start
         remaining = max(0.0, duration - elapsed)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        box = detect_largest_face_box(gray, cascade)
+        
+        h, w = frame.shape[:2]
+        detector.setInputSize((w, h))
+        retval, faces = detector.detect(frame)
 
-        if box is None:
-            last_preview_text = "Khong thay mat - hay nhin thang camera"
+        display = frame.copy()
+        largest_face = None
+
+        if retval and faces is not None:
+            # Sort to get the largest face
+            faces_list = list(faces)
+            faces_list.sort(key=lambda f: f[2] * f[3], reverse=True)
+            largest_face = faces_list[0]
+
+        if largest_face is None:
             if show_camera:
-                preview = frame.copy()
-                cv2.putText(preview, last_preview_text, (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 180, 255), 2)
-                cv2.putText(preview, f"Frames hop le: {len(votes)}/{target_frames}", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-                cv2.putText(preview, f"Con lai: {remaining:.1f}s", (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-                cv2.imshow(window_name, preview)
+                cv2.putText(display, "Khong thay mat - hay nhin thang camera", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 255), 2)
+                cv2.putText(display, f"Frames hop le: {len(votes)}/{target_frames}", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.putText(display, f"Con lai: {remaining:.1f}s", (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                cv2.imshow(window_name, display)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     cancelled = True
                     break
             time.sleep(0.03)
             continue
 
-        roi = crop_face_roi(gray, box)
-        label_id, conf = recognizer.predict(roi)
-        if 1 <= label_id <= len(labels) and conf <= threshold:
-            profile = labels[label_id - 1]
-            label_text = f"{profile['name']} | {profile.get('student_id', '')}".strip()
-            vote_value = json.dumps(profile, ensure_ascii=False, sort_keys=True)
+        # Extract embedding
+        aligned = recognizer.alignCrop(frame, largest_face)
+        feat = recognizer.feature(aligned)
+
+        best_name = "Unknown"
+        best_profile = {"name": "Unknown", "student_id": ""}
+        best_score = -1.0
+
+        for profile in database:
+            db_emb = np.array(profile["embedding"], dtype=np.float32).reshape(1, 128)
+            score = recognizer.match(feat, db_emb, cv2.FaceRecognizerSF_FR_COSINE)
+            if score > best_score:
+                best_score = score
+                best_name = profile["name"]
+                best_profile = {"name": profile["name"], "student_id": profile["student_id"]}
+
+        # Decide if match
+        is_known = best_score >= threshold
+        if is_known:
+            vote_value = json.dumps(best_profile, ensure_ascii=False, sort_keys=True)
+            label_text = f"{best_name} ({best_score:.2f})"
             box_color = (0, 220, 0)
         else:
-            label_text = "Unknown"
             vote_value = "Unknown"
+            label_text = f"Unknown ({best_score:.2f})"
             box_color = (0, 0, 255)
 
         if len(votes) < target_frames:
             votes.append(vote_value)
-            confidences.append(float(conf))
-            print(f"Face frame {len(votes)}/{target_frames}: {label_text} conf={conf:.1f}")
+            scores.append(float(best_score))
+            print(f"Face frame {len(votes)}/{target_frames}: {label_text}")
 
-        last_preview_text = f"{label_text}  conf={conf:.1f}"
         if show_camera:
-            preview = frame.copy()
-            x, y, w, h = box
-            cv2.rectangle(preview, (x, y), (x + w, y + h), box_color, 2)
-            cv2.putText(preview, last_preview_text, (x, max(30, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, box_color, 2)
-            cv2.putText(preview, f"Frames hop le: {len(votes)}/{target_frames}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            cv2.putText(preview, f"Con lai: {remaining:.1f}s", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
-            cv2.putText(preview, "Can mat trong khung xanh, du anh sang", (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-            cv2.imshow(window_name, preview)
+            x, y, fw, fh = map(int, largest_face[0:4])
+            cv2.rectangle(display, (x, y), (x + fw, y + fh), box_color, 2)
+            cv2.putText(display, label_text, (x, max(30, y - 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, box_color, 2)
+            cv2.putText(display, f"Frames hop le: {len(votes)}/{target_frames}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(display, f"Con lai: {remaining:.1f}s", (20, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.imshow(window_name, display)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 cancelled = True
                 break
         time.sleep(0.03)
-
-    if cancelled:
-        print("Camera preview cancelled by user.")
 
     cap.release()
     if show_camera:
@@ -306,21 +207,20 @@ def recognize_once(
     if len(votes) < target_frames:
         print(f"Not enough valid frames: {len(votes)}/{target_frames}; returning Unknown")
         return {"name": "Unknown", "student_id": ""}, None, len(votes)
+
     winner = Counter(votes).most_common(1)[0][0]
     result = {"name": "Unknown", "student_id": ""} if winner == "Unknown" else json.loads(winner)
-    avg_conf = sum(confidences) / len(confidences) if confidences else None
-    return result, avg_conf, len(votes)
+    avg_score = sum(scores) / len(scores) if scores else None
+    return result, avg_score, len(votes)
 
 
 def build_discord_alert(profile: dict[str, str], confidence: float | None, frames: int, source: str) -> dict:
     result = profile["name"]
     student_id = profile.get("student_id", "")
-    confidence_text = "N/A" if confidence is None else f"{confidence:.2f}"
+    confidence_text = "N/A" if confidence is None else f"{confidence:.3f}"
     now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Keep user-facing text as Unicode escape sequences so Windows editors/shells
-    # cannot corrupt Vietnamese accents or emoji into question marks.
-    icon_speaker = "\U0001F50A"  # loud speaker
+    icon_speaker = "\U0001F50A"
     icon_alarm = "\U0001F6A8"
     icon_lock = "\U0001F512"
     icon_unlock = "\U0001F513"
@@ -338,27 +238,15 @@ def build_discord_alert(profile: dict[str, str], confidence: float | None, frame
     if result == "Unknown":
         title = f"{icon_speaker} {icon_alarm} C\u1EA3nh b\u00E1o ng\u01B0\u1EDDi l\u1EA1"
         color = 0xFF3B30
-        description = (
-            f"{icon_lock} Ph\u00E1t hi\u1EC7n khu\u00F4n m\u1EB7t ch\u01B0a \u0111\u0103ng k\u00FD. "
-            "C\u1EEDa v\u1EABn kh\u00F3a."
-        )
-        content = (
-            f"{icon_speaker} {icon_alarm} **C\u1EA2NH B\u00C1O NG\u01AF\u1EDCI L\u1EA0**\n"
-            f"{icon_camera} H\u1EC7 th\u1ED1ng v\u1EEBa ph\u00E1t hi\u1EC7n: **Unknown**"
-        )
+        description = f"{icon_lock} Ph\u00E1t hi\u1EC7n khu\u00F4n m\u1EB7t ch\u01B0a \u0111\u0103ng k\u00FD. C\u1EEDa v\u1EABn kh\u00F3a."
+        content = f"{icon_speaker} {icon_alarm} **C\u1EA2NH B\u00C1O NG\u01AF\u1EDCI L\u1EA0**\n{icon_camera} H\u1EC7 th\u1ED1ng v\u1EEBa ph\u00E1t hi\u1EC7n: **Unknown**"
         status_icon = icon_lock
         status_text = "T\u1EEB ch\u1ED1i m\u1EDF c\u1EEDa"
     else:
         title = f"{icon_speaker} {icon_wave} Ch\u00E0o m\u1EEBng {result}"
         color = 0x34C759
-        description = (
-            f"{icon_ok} Nh\u1EADn di\u1EC7n th\u00E0nh c\u00F4ng: **{result}**"
-            + (f"\n{icon_id} M\u00E3 sinh vi\u00EAn: **{student_id}**" if student_id else "")
-        )
-        content = (
-            f"{icon_speaker} {icon_party} **CH\u00C0O M\u1EEANG {result.upper()}**\n"
-            + (f"{icon_student} Sinh vi\u00EAn | {icon_id} MSV: **{student_id}**" if student_id else f"{icon_student} Kh\u00E1ch \u0111\u00E3 x\u00E1c th\u1EF1c")
-        )
+        description = f"{icon_ok} Nh\u1EADn di\u1EC7n th\u00E0nh c\u00F4ng: **{result}**" + (f"\n{icon_id} M\u00E3 sinh vi\u00EAn: **{student_id}**" if student_id else "")
+        content = f"{icon_speaker} {icon_party} **CH\u00C0O M\u1EEANG {result.upper()}**\n" + (f"{icon_student} Sinh vi\u00EAn | {icon_id} MSV: **{student_id}**" if student_id else f"{icon_student} Kh\u00E1ch \u0111\u00E3 x\u00E1c th\u1EF1c")
         status_icon = icon_unlock
         status_text = "\u0110\u01B0\u1EE3c ph\u00E9p m\u1EDF c\u1EEDa"
 
@@ -368,7 +256,7 @@ def build_discord_alert(profile: dict[str, str], confidence: float | None, frame
         {"name": f"{icon_id} M\u00E3 sinh vi\u00EAn", "value": student_id or "-", "inline": True},
         {"name": f"{icon_door} Tr\u1EA1ng th\u00E1i c\u1EEDa", "value": f"{status_icon} {status_text}", "inline": False},
         {"name": f"{icon_camera} S\u1ED1 khung h\u00ECnh", "value": str(frames), "inline": True},
-        {"name": f"{icon_chart} \u0110\u1ED9 tin c\u1EADy", "value": confidence_text, "inline": True},
+        {"name": f"{icon_chart} Cosine similarity", "value": confidence_text, "inline": True},
         {"name": f"{icon_clock} Th\u1EDDi gian", "value": now_text, "inline": False},
     ]
 
@@ -408,33 +296,27 @@ def send_discord_alert(webhook_url: str, profile: dict[str, str], confidence: fl
 
 
 def play_pc_sound(result: str, enabled: bool = True) -> None:
-    """Play a short Windows melody on the PC running this listener."""
     if not enabled:
         return
 
     def worker() -> None:
         try:
             import winsound
-
             if result == "Unknown":
-                # Loud warning pattern: high-low siren, repeated.
                 melody = [
                     (1200, 220), (700, 220),
                     (1200, 220), (700, 220),
                     (1500, 350), (500, 450),
                 ]
             else:
-                # Welcome melody: short rising tune.
                 melody = [
                     (523, 180), (659, 180), (784, 220),
                     (1047, 320), (784, 180), (1047, 420),
                 ]
-
             for frequency, duration_ms in melody:
                 winsound.Beep(frequency, duration_ms)
                 time.sleep(0.04)
         except Exception as exc:
-            # Sound is optional; do not break Firebase/Discord flow if audio fails.
             print(f"PC sound skipped: {exc}")
 
     threading.Thread(target=worker, daemon=True).start()
@@ -485,7 +367,7 @@ def main() -> None:
     parser.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR), help="Folder containing known_faces/<person> images")
     parser.add_argument("--camera", type=int, default=CAMERA_INDEX)
     parser.add_argument("--duration", type=float, default=CAPTURE_DURATION_SEC)
-    parser.add_argument("--threshold", type=float, default=THRESHOLD)
+    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     parser.add_argument("--frames", type=int, default=TARGET_FACE_FRAMES, help="Face frames required before deciding")
     parser.add_argument("--discord-webhook", default=DISCORD_WEBHOOK_URL, help="Discord webhook URL, or set DISCORD_WEBHOOK_URL")
     parser.add_argument("--notify-known", action="store_true", help="Also send Discord messages for recognized known faces")
@@ -494,17 +376,42 @@ def main() -> None:
     parser.add_argument("--standalone", action="store_true", help="Run camera continuously without waiting for Firebase trigger")
     parser.add_argument("--cooldown", type=float, default=5.0, help="Seconds between recognitions in standalone mode")
     args = parser.parse_args()
+
+    # Defensive check: if the user supplies an old threshold (like 70), fallback to default Cosine threshold
+    if args.threshold > 1.0:
+        print(f"[Warning] Supplied threshold {args.threshold} is not valid for Cosine Similarity. Resetting to {DEFAULT_THRESHOLD}")
+        args.threshold = DEFAULT_THRESHOLD
+
     if args.frames < 1:
         parser.error("--frames must be at least 1")
 
-
     init_firebase()
-    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    if cascade.empty():
-        raise RuntimeError("Cannot load Haar cascade")
+    yunet_path, sface_path = check_and_download_models()
 
-    recognizer, labels = load_or_train_model(Path(args.data_dir), cascade)
-    print(f"Labels: {labels}")
+    # Load database
+    try:
+        database = load_database()
+    except FileNotFoundError as e:
+        print(e)
+        return
+
+    # Initialize YuNet
+    detector = cv2.FaceDetectorYN.create(
+        model=str(yunet_path),
+        config="",
+        input_size=(320, 320),
+        score_threshold=0.9,
+        nms_threshold=0.3,
+        top_k=5000
+    )
+
+    # Initialize SFace
+    recognizer = cv2.FaceRecognizerSF.create(
+        model=str(sface_path),
+        config=""
+    )
+
+    print(f"Loaded SFace database with {len(database)} profiles.")
 
     # ---- STANDALONE MODE: Camera opens immediately and scans continuously ----
     if args.standalone:
@@ -514,6 +421,15 @@ def main() -> None:
             cap = cv2.VideoCapture(args.camera)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open camera {args.camera}")
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+        # Pre-read frame to set YuNet input size
+        ret, frame = cap.read()
+        if ret:
+            h, w = frame.shape[:2]
+            detector.setInputSize((w, h))
 
         window_name = "Face Door - Standalone"
         last_result_time = 0.0
@@ -525,30 +441,59 @@ def main() -> None:
                     time.sleep(0.05)
                     continue
 
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                box = detect_largest_face_box(gray, cascade)
+                h, w = frame.shape[:2]
+                detector.setInputSize((w, h))
+                retval, faces = detector.detect(frame)
+
                 now = time.time()
                 cooldown_ok = (now - last_result_time) >= args.cooldown
 
                 display = frame.copy()
-                if box is not None:
-                    x, y, w, h = box
-                    roi = crop_face_roi(gray, box)
-                    label_id, conf = recognizer.predict(roi)
-                    if 1 <= label_id <= len(labels) and conf <= args.threshold:
-                        profile = labels[label_id - 1]
-                        label_text = f"{profile['name']} | {profile.get('student_id','')}"
+                largest_face = None
+
+                if retval and faces is not None:
+                    faces_list = list(faces)
+                    faces_list.sort(key=lambda f: f[2] * f[3], reverse=True)
+                    largest_face = faces_list[0]
+
+                if largest_face is not None:
+                    # Align and match
+                    aligned = recognizer.alignCrop(frame, largest_face)
+                    feat = recognizer.feature(aligned)
+
+                    best_name = "Unknown"
+                    best_profile = {"name": "Unknown", "student_id": ""}
+                    best_score = -1.0
+
+                    for profile in database:
+                        db_emb = np.array(profile["embedding"], dtype=np.float32).reshape(1, 128)
+                        score = recognizer.match(feat, db_emb, cv2.FaceRecognizerSF_FR_COSINE)
+                        if score > best_score:
+                            best_score = score
+                            best_name = profile["name"]
+                            best_profile = {"name": profile["name"], "student_id": profile["student_id"]}
+
+                    is_known = best_score >= args.threshold
+                    if is_known:
+                        label_text = f"{best_name} ({best_score:.2f})"
                         box_color = (0, 220, 0)
                         if cooldown_ok:
-                            write_result(profile, float(conf), 1, "standalone",
+                            write_result(best_profile, float(best_score), 1, "standalone",
                                          args.discord_webhook, args.notify_known, not args.no_sound)
                             flag_ref.set(False)
                             last_result_time = now
-                            print(f"[STANDALONE] Recognized: {label_text} conf={conf:.1f}")
+                            print(f"[STANDALONE] Recognized: {label_text}")
                     else:
-                        label_text = f"Unknown ({conf:.0f})"
+                        label_text = f"Unknown ({best_score:.2f})"
                         box_color = (0, 0, 255)
-                    cv2.rectangle(display, (x, y), (x+w, y+h), box_color, 2)
+                        if cooldown_ok and best_score >= 0.15: # only trigger unknown notification for actual faces, not random noise
+                            write_result(best_profile, float(best_score), 1, "standalone",
+                                         args.discord_webhook, args.notify_known, not args.no_sound)
+                            last_result_time = now
+                            print(f"[STANDALONE] Recognized Unknown")
+
+                    x, y, fw, fh = map(int, largest_face[0:4])
+                    cv2.rectangle(display, (x, y), (x+fw, y+fh), box_color, 2)
                     cv2.putText(display, label_text, (x, max(30, y-10)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2)
                 else:
@@ -580,14 +525,14 @@ def main() -> None:
         while True:
             if flag_ref.get() is True:
                 try:
-                    profile, conf, frames = recognize_once(
-                        recognizer, labels, cascade, args.camera,
-                        args.duration, args.threshold, args.frames, args.show_camera,
+                    profile, score, frames = recognize_once(
+                        detector, recognizer, database, args.camera,
+                        args.duration, args.threshold, args.frames, args.show_camera
                     )
-                    write_result(profile, conf, frames,
+                    write_result(profile, score, frames,
                                  "firebase_face_recognition_listener.py",
                                  args.discord_webhook, args.notify_known, not args.no_sound)
-                    print(f"Result={profile['name']} MSV={profile.get('student_id', '')} confidence={conf} frames={frames}")
+                    print(f"Result={profile['name']} MSV={profile.get('student_id', '')} score={score} frames={frames}")
                 except Exception as exc:
                     write_result({"name": "Unknown", "student_id": ""}, None, 0,
                                  f"error: {exc}", args.discord_webhook, True, not args.no_sound)
@@ -605,5 +550,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
