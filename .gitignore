@@ -1,6 +1,3 @@
-admin_firebase.json
-secrets.h
-models/
 __pycache__/
 *.xml
 *.pyc
