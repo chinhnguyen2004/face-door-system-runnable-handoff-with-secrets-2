@@ -486,7 +486,7 @@ def main() -> None:
                     else:
                         label_text = f"Unknown ({best_score:.2f})"
                         box_color = (0, 0, 255)
-                        if cooldown_ok and best_score >= 0.15: # only trigger unknown notification for actual faces, not random noise
+                        if cooldown_ok:
                             write_result(best_profile, float(best_score), 1, "standalone",
                                          args.discord_webhook, args.notify_known, not args.no_sound)
                             last_result_time = now
