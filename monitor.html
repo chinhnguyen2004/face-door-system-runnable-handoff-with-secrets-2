@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hệ Thống Cửa Nhận Diện Khuôn Mặt - Giám Sát Thời Gian Thực</title>
+  <!-- Google Fonts: Plus Jakarta Sans for premium modern look -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-gradient: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #0f0c29 50%, #03001e 100%);
+      --glass-bg: rgba(17, 24, 39, 0.65);
+      --glass-border: rgba(255, 255, 255, 0.08);
+      --glow-green: 0 0 20px rgba(34, 197, 94, 0.4);
+      --glow-red: 0 0 20px rgba(239, 68, 68, 0.4);
+      --glow-blue: 0 0 25px rgba(59, 130, 246, 0.35);
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent-green: #22c55e;
+      --accent-red: #ef4444;
+      --accent-blue: #3b82f6;
+      --accent-yellow: #eab308;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+
+    body {
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 1.5rem;
+      overflow-x: hidden;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* Header */
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--glass-border);
+    }
+
+    .brand-title {
+      font-size: 1.8rem;
+      font-weight: 800;
+      letter-spacing: -0.05em;
+      background: linear-gradient(135deg, #ffffff 0%, #93c5fd 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brand-title span {
+      font-size: 2rem;
+    }
+
+    .status-pill {
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.5rem 1rem;
+      border-radius: 9999px;
+      background: rgba(31, 41, 55, 0.5);
+      border: 1px solid var(--glass-border);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.3s ease;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      display: inline-block;
+    }
+
+    .status-pill.online {
+      border-color: rgba(34, 197, 94, 0.4);
+      box-shadow: var(--glow-green);
+    }
+    .status-pill.online .status-dot {
+      background: var(--accent-green);
+      animation: pulse 1.5s infinite;
+    }
+
+    .status-pill.offline {
+      border-color: rgba(239, 68, 68, 0.4);
+      box-shadow: var(--glow-red);
+    }
+    .status-pill.offline .status-dot {
+      background: var(--accent-red);
+    }
+
+    /* Grid Layout */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 1.5rem;
+    }
+
+    @media (max-width: 992px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Glass Card styling */
+    .glass-card {
+      background: var(--glass-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 1.5rem;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+    }
+
+    .glass-card:hover {
+      box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    .card-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 1.2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: #93c5fd;
+    }
+
+    /* Live Recognition Card */
+    .recognition-view {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 250px;
+      text-align: center;
+      position: relative;
+    }
+
+    .profile-glow {
+      position: absolute;
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      filter: blur(40px);
+      z-index: 1;
+      opacity: 0.15;
+      transition: all 0.5s ease;
+    }
+
+    .profile-glow.success {
+      background: var(--accent-green);
+      opacity: 0.25;
+    }
+
+    .profile-glow.fail {
+      background: var(--accent-red);
+      opacity: 0.25;
+    }
+
+    .avatar-circle {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: rgba(31, 41, 55, 0.7);
+      border: 3px solid var(--glass-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 3rem;
+      margin-bottom: 1.5rem;
+      z-index: 2;
+      transition: all 0.3s ease;
+    }
+
+    .success-border {
+      border-color: var(--accent-green) !important;
+      box-shadow: var(--glow-green);
+    }
+
+    .fail-border {
+      border-color: var(--accent-red) !important;
+      box-shadow: var(--glow-red);
+    }
+
+    .name-text {
+      font-size: 2rem;
+      font-weight: 800;
+      margin-bottom: 0.2rem;
+      z-index: 2;
+    }
+
+    .id-badge {
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: var(--accent-blue);
+      background: rgba(59, 130, 246, 0.12);
+      padding: 0.3rem 0.8rem;
+      border-radius: 9999px;
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      display: inline-block;
+      margin-bottom: 1.5rem;
+      z-index: 2;
+    }
+
+    .metrics-row {
+      display: flex;
+      gap: 2rem;
+      width: 100%;
+      justify-content: center;
+      border-top: 1px solid var(--glass-border);
+      padding-top: 1.2rem;
+      z-index: 2;
+    }
+
+    .metric-box {
+      text-align: center;
+    }
+
+    .metric-value {
+      font-size: 1.2rem;
+      font-weight: 700;
+    }
+
+    .metric-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-top: 0.2rem;
+      letter-spacing: 0.05em;
+    }
+
+    /* Status Grid */
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .status-card {
+      padding: 1.2rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 120px;
+    }
+
+    .status-label {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .status-value {
+      font-size: 1.4rem;
+      font-weight: 800;
+      margin-top: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 9999px;
+      margin-top: 0.6rem;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--accent-blue);
+      border-radius: 9999px;
+      width: 0%;
+      transition: width 0.5s ease;
+    }
+
+    /* History Feed */
+    .history-feed {
+      display: flex;
+      flex-direction: column;
+      max-height: 480px;
+      overflow-y: auto;
+      padding-right: 0.3rem;
+    }
+
+    .history-feed::-webkit-scrollbar {
+      width: 5px;
+    }
+
+    .history-feed::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 9999px;
+    }
+
+    .history-feed::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 9999px;
+    }
+
+    .history-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.9rem;
+      border-radius: 12px;
+      margin-bottom: 0.6rem;
+      border: 1px solid var(--glass-border);
+      background: rgba(255, 255, 255, 0.01);
+      transition: all 0.2s ease;
+      animation: slideIn 0.3s ease forwards;
+    }
+
+    .history-row:hover {
+      background: rgba(255, 255, 255, 0.03);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .history-left {
+      display: flex;
+      align-items: center;
+      gap: 0.8rem;
+    }
+
+    .history-badge {
+      width: 8px;
+      height: 40px;
+      border-radius: 9999px;
+      flex-shrink: 0;
+    }
+
+    .history-badge.success {
+      background: var(--accent-green);
+      box-shadow: var(--glow-green);
+    }
+
+    .history-badge.fail {
+      background: var(--accent-red);
+      box-shadow: var(--glow-red);
+    }
+
+    .history-info {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .history-name {
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+
+    .history-id {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      margin-top: 0.1rem;
+    }
+
+    .history-right {
+      text-align: right;
+    }
+
+    .history-time {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .history-confidence {
+      font-size: 0.75rem;
+      font-weight: 700;
+      margin-top: 0.15rem;
+    }
+
+    .history-confidence.success {
+      color: var(--accent-green);
+    }
+
+    .history-confidence.fail {
+      color: var(--accent-red);
+    }
+
+    /* Actions Footer */
+    footer {
+      margin-top: auto;
+      padding-top: 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      border-top: 1px solid var(--glass-border);
+    }
+
+    /* Keyframe Animations */
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.5; }
+      50% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 12px var(--accent-green); }
+      100% { transform: scale(0.95); opacity: 0.5; }
+    }
+
+    @keyframes slideIn {
+      from { transform: translateY(10px); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .pulse-lock {
+      animation: lockGlow 2s infinite ease-in-out;
+    }
+
+    @keyframes lockGlow {
+      0%, 100% { filter: drop-shadow(0 0 2px rgba(255,255,255,0.1)); }
+      50% { filter: drop-shadow(0 0 8px #93c5fd); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Header Section -->
+    <header>
+      <div class="brand-title">
+        <span>🔊🚪</span> Face Door Monitor
+      </div>
+      <div id="connectionPill" class="status-pill offline">
+        <span class="status-dot"></span> <span id="connectionText">Firebase Disconnected</span>
+      </div>
+    </header>
+
+    <!-- Main Grid Layout -->
+    <div class="dashboard-grid">
+      
+      <!-- Left Column: Current Status and Metrics -->
+      <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+        
+        <!-- Live Recognition Results -->
+        <div class="glass-card">
+          <div class="card-title">🧑‍🎓 Nhận Diện Mới Nhất</div>
+          <div class="recognition-view">
+            <div id="profileGlow" class="profile-glow"></div>
+            <div id="avatarCircle" class="avatar-circle">👤</div>
+            <div id="nameText" class="name-text">Chờ Quét...</div>
+            <div id="idBadge" class="id-badge" style="display: none;">Mã SV: -</div>
+            
+            <div class="metrics-row">
+              <div class="metric-box">
+                <div id="confidenceVal" class="metric-value">-</div>
+                <div class="metric-label">Độ tương đồng</div>
+              </div>
+              <div class="metric-box">
+                <div id="framesVal" class="metric-value">-</div>
+                <div class="metric-label">Số Khung hình</div>
+              </div>
+              <div class="metric-box">
+                <div id="timeVal" class="metric-value">-</div>
+                <div class="metric-label">Thời gian</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- System & Hardware Sub-status -->
+        <div class="status-grid">
+          <div class="glass-card status-card">
+            <div class="status-label">🚪 Trạng Thái Cửa</div>
+            <div class="status-value">
+              <span id="doorLockIcon" style="font-size: 1.6rem;" class="pulse-lock">🔒</span>
+              <span id="doorLockState">Đang Đóng</span>
+            </div>
+          </div>
+          
+          <div class="glass-card status-card">
+            <div class="status-label">📐 Khoảng Cách Sonar</div>
+            <div>
+              <div class="status-value">
+                <span style="font-size: 1.6rem;">📏</span>
+                <span id="distanceVal">- cm</span>
+              </div>
+              <div class="progress-bar-container">
+                <div id="distanceProgress" class="progress-fill"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="glass-card status-card">
+            <div class="status-label">🖥 PC AI Listener</div>
+            <div class="status-value">
+              <span id="pcStatusDot" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #ef4444;"></span>
+              <span id="pcStatusText">Offline</span>
+            </div>
+          </div>
+
+          <div class="glass-card status-card">
+            <div class="status-label">💓 ESP8266 Heartbeat</div>
+            <div class="status-value">
+              <span style="font-size: 1.6rem; animation: pulse 1s infinite;" id="heartIcon">⏳</span>
+              <span id="heartbeatText">Chờ kết nối...</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Column: Real-time History Feed -->
+      <div class="glass-card" style="display: flex; flex-direction: column;">
+        <div class="card-title">📜 Nhật Ký Vào Cửa Thời Gian Thực</div>
+        <div id="historyFeed" class="history-feed">
+          <div class="history-row" style="justify-content: center; color: var(--text-muted);">
+            Đang tải dữ liệu...
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <footer>
+      <div>Hệ thống điều khiển cửa thông minh AI - Đồ án thực tập</div>
+      <div>Giám sát thời gian thực bằng Firebase REST</div>
+    </footer>
+  </div>
+
+  <!-- Firebase Legacy Compat Libraries -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-database-compat.js"></script>
+  
+  <script>
+    // Firebase Config (using your exact project specs)
+    const firebaseConfig = {
+      apiKey: "AIzaSyCIhDZJHgZYMhu_PkccpoHbMNp1bSZ65EE",
+      authDomain: "face-f49c1.firebaseapp.com",
+      databaseURL: "https://face-f49c1-default-rtdb.asia-southeast1.firebasedatabase.app/",
+      projectId: "face-f49c1"
+    };
+
+    // Initialize Firebase
+    firebase.initializeApp(firebaseConfig);
+    const database = firebase.database();
+    const deviceId = "esp01";
+
+    // DOM helper
+    const $ = (id) => document.getElementById(id);
+
+    // Format Timestamp
+    function formatTime(timestamp) {
+      if (!timestamp) return "-";
+      const num = Number(timestamp);
+      if (isNaN(num)) return String(timestamp);
+      const date = new Date(num);
+      return date.toLocaleTimeString("vi-VN", {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+    }
+
+    // 1. Listen for connection state
+    database.ref(".info/connected").on("value", (snapshot) => {
+      const pill = $("connectionPill");
+      const text = $("connectionText");
+      if (snapshot.val() === true) {
+        pill.className = "status-pill online";
+        text.textContent = "Firebase Online";
+      } else {
+        pill.className = "status-pill offline";
+        text.textContent = "Firebase Offline";
+      }
+    });
+
+    // 2. Listen for latest recognition
+    database.ref(`/recognitions/${deviceId}`).on("value", (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      const isUnknown = data.result === "Unknown";
+      
+      // Update UI elements with glow effect
+      const avatar = $("avatarCircle");
+      const name = $("nameText");
+      const idBadge = $("idBadge");
+      const glow = $("profileGlow");
+
+      if (isUnknown) {
+        avatar.textContent = "🚨";
+        avatar.className = "avatar-circle fail-border";
+        name.textContent = "Người Lạ (Unknown)";
+        name.style.color = "var(--accent-red)";
+        idBadge.style.display = "none";
+        glow.className = "profile-glow fail";
+      } else {
+        avatar.textContent = "🎓";
+        avatar.className = "avatar-circle success-border";
+        name.textContent = data.result;
+        name.style.color = "var(--accent-green)";
+        
+        if (data.student_id) {
+          idBadge.textContent = `Mã SV: ${data.student_id}`;
+          idBadge.style.display = "inline-block";
+        } else {
+          idBadge.style.display = "none";
+        }
+        glow.className = "profile-glow success";
+      }
+
+      // Update metrics
+      $("confidenceVal").textContent = data.confidence ? Number(data.confidence).toFixed(2) : "N/A";
+      $("confidenceVal").style.color = isUnknown ? "var(--accent-red)" : "var(--accent-green)";
+      $("framesVal").textContent = data.frames || "-";
+      $("timeVal").textContent = formatTime(data.timestamp);
+    });
+
+    // 3. Listen for door and hardware status
+    database.ref(`/status/${deviceId}`).on("value", (snapshot) => {
+      const data = snapshot.val();
+      if (!data) return;
+
+      // Door State
+      const lockIcon = $("doorLockIcon");
+      const lockText = $("doorLockState");
+      if (snapshot.child("doorOpen").val() === true) {
+        lockIcon.textContent = "🔓";
+        lockText.textContent = "Đang Mở";
+        lockText.style.color = "var(--accent-green)";
+      } else {
+        lockIcon.textContent = "🔒";
+        lockText.textContent = "Đang Đóng";
+        lockText.style.color = "var(--text-main)";
+      }
+
+      // Distance progress bar (assuming max distance is 100cm for visualization)
+      const dist = data.distance_cm;
+      const progress = $("distanceProgress");
+      $("distanceVal").textContent = dist != null ? `${Number(dist).toFixed(1)} cm` : "- cm";
+      if (dist != null) {
+        let percent = Math.min(100, Math.max(0, (dist / 80) * 100)); // normalized to 80cm
+        progress.style.width = `${percent}%`;
+        progress.style.background = dist < 50 ? "var(--accent-green)" : "var(--accent-blue)";
+      }
+
+      // Heartbeat / last seen
+      if (data.lastSeenMs != null) {
+        let uptimeSec = Math.floor(data.lastSeenMs / 1000);
+        let minutes = Math.floor(uptimeSec / 60);
+        let seconds = uptimeSec % 60;
+        $("heartbeatText").textContent = `Hoạt động: ${minutes}p ${seconds}s`;
+        $("heartIcon").style.color = "var(--accent-green)";
+      }
+    });
+
+    // 4. Listen for PC listener online state
+    database.ref("/status/pc_listener").on("value", (snapshot) => {
+      const data = snapshot.val();
+      const dot = $("pcStatusDot");
+      const text = $("pcStatusText");
+      if (data && data.running === true) {
+        dot.style.background = "var(--accent-green)";
+        dot.style.boxShadow = "0 0 10px var(--accent-green)";
+        text.textContent = "Đang chạy (Online)";
+        text.style.color = "var(--accent-green)";
+      } else {
+        dot.style.background = "var(--accent-red)";
+        dot.style.boxShadow = "none";
+        text.textContent = "Đã tắt (Offline)";
+        text.style.color = "var(--text-muted)";
+      }
+    });
+
+    // 5. Listen and build visitor history feed
+    database.ref("/history").limitToLast(12).on("value", (snapshot) => {
+      const feed = $("historyFeed");
+      const data = snapshot.val() || {};
+      
+      const items = Object.entries(data).reverse(); // newest first
+      if (items.length === 0) {
+        feed.innerHTML = `<div class="history-row" style="justify-content: center; color: var(--text-muted);">Chưa có lịch sử nhận diện</div>`;
+        return;
+      }
+
+      feed.innerHTML = ""; // Clear loader
+      
+      items.forEach(([key, val]) => {
+        const isUnknown = val.result === "Unknown";
+        const row = document.createElement("div");
+        row.className = "history-row";
+        
+        row.innerHTML = `
+          <div class="history-left">
+            <div class="history-badge ${isUnknown ? 'fail' : 'success'}"></div>
+            <div class="history-info">
+              <span class="history-name">${isUnknown ? 'Người Lạ (Unknown)' : val.result}</span>
+              <span class="history-id">${val.student_id ? 'MSV: ' + val.student_id : 'Khách vãng lai'}</span>
+            </div>
+          </div>
+          <div class="history-right">
+            <div class="history-time">${formatTime(val.timestamp)}</div>
+            <div class="history-confidence ${isUnknown ? 'fail' : 'success'}">
+              ${val.confidence ? '★ ' + Number(val.confidence).toFixed(2) : ''}
+            </div>
+          </div>
+        `;
+        feed.appendChild(row);
+      });
+    });
+  </script>
+</body>
+</html>
