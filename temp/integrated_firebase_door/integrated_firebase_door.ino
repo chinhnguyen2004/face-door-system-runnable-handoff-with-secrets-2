@@ -80,7 +80,7 @@ unsigned long captureStartedMs = 0;
 unsigned long doorOpenedMs = 0;
 unsigned long lastSensorMs = 0;
 unsigned long lastFirebaseMs = 0;
-int lastResultTimestamp = -1;
+double lastResultTimestamp = -1.0;
 float lastDistance = -1.0;
 
 void lcdLine(uint8_t row, String text) {
@@ -145,10 +145,10 @@ void setupFirebase() {
   Firebase.RTDB.setBool(&fbdo, capturePath.c_str(), false);
   
   // Đọc timestamp hiện tại để tránh nhận diện nhầm kết quả cũ khi vừa khởi động
-  if (Firebase.RTDB.getInt(&fbdo, resultTimePath.c_str())) {
-    lastResultTimestamp = fbdo.intData();
+  if (Firebase.RTDB.getDouble(&fbdo, resultTimePath.c_str())) {
+    lastResultTimestamp = fbdo.doubleData();
     Serial.print("Initial result timestamp: ");
-    Serial.println(lastResultTimestamp);
+    Serial.println(lastResultTimestamp, 0);
   }
 }
 
@@ -228,8 +228,8 @@ void requestCaptureIfNeeded() {
 }
 
 void checkRecognitionResult() {
-  if (Firebase.RTDB.getInt(&fbdo, resultTimePath.c_str())) {
-    int ts = fbdo.intData();
+  if (Firebase.RTDB.getDouble(&fbdo, resultTimePath.c_str())) {
+    double ts = fbdo.doubleData();
     if (ts != lastResultTimestamp) {
       lastResultTimestamp = ts;
       if (Firebase.RTDB.getString(&fbdo, resultPath.c_str())) {
