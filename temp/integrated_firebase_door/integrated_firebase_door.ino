@@ -334,11 +334,18 @@ void loop() {
     }
   }
 
-  if (now - lastFirebaseMs >= FIREBASE_INTERVAL_MS) {
+  // Tần suất gửi tin Firebase: 150ms khi đang quét nhận diện, 2500ms khi nhàn rỗi (tiết kiệm băng thông)
+  unsigned long firebase_interval = captureRequested ? 150 : 2500;
+
+  if (now - lastFirebaseMs >= firebase_interval) {
     lastFirebaseMs = now;
     if (lastDistance >= 0) Firebase.RTDB.setFloat(&fbdo, distancePath.c_str(), lastDistance);
     Firebase.RTDB.setInt(&fbdo, lastSeenPath.c_str(), (int)now);
-    checkRecognitionResult();
+    
+    // Chỉ truy vấn kết quả nhận diện khi đang thực sự yêu cầu quét mặt
+    if (captureRequested) {
+      checkRecognitionResult();
+    }
   }
 
   if (doorOpen && now - doorOpenedMs >= DOOR_OPEN_MS) {
