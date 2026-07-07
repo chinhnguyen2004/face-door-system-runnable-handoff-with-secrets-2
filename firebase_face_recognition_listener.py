@@ -177,11 +177,21 @@ def recognize_once(
         print("Camera preview is ON. Press q in the preview window to cancel.")
 
     cancelled = False
+    last_cancel_check_time = time.time()
     while time.time() - start < duration:
         ret, frame = cap.read()
         if not ret:
             time.sleep(0.05)
             continue
+
+        # Check if capture request was cancelled by hardware (obstacle removed)
+        now_time = time.time()
+        if now_time - last_cancel_check_time >= 0.5:
+            last_cancel_check_time = now_time
+            if db.reference("/capture_request").get() is not True:
+                print("[TRIGGER] Obstacle removed. Closing camera.")
+                cancelled = True
+                break
 
         elapsed = time.time() - start
         remaining = max(0.0, duration - elapsed)
@@ -261,12 +271,12 @@ def recognize_once(
 
     if len(votes) < target_frames:
         print(f"Not enough valid frames: {len(votes)}/{target_frames}; returning Unknown")
-        return {"name": "Unknown", "student_id": ""}, None, len(votes)
+        return {"name": "Unknown", "student_id": ""}, None, len(votes), cancelled
 
     winner = Counter(votes).most_common(1)[0][0]
     result = {"name": "Unknown", "student_id": ""} if winner == "Unknown" else json.loads(winner)
     avg_score = sum(scores) / len(scores) if scores else None
-    return result, avg_score, len(votes)
+    return result, avg_score, len(votes), False
 
 
 def build_discord_alert(profile: dict[str, str], confidence: float | None, frames: int, source: str) -> dict:
@@ -606,14 +616,17 @@ def main() -> None:
         while True:
             if flag_ref.get() is True:
                 try:
-                    profile, score, frames = recognize_once(
+                    profile, score, frames, was_cancelled = recognize_once(
                         detector, recognizer, database, args.camera,
                         args.duration, args.threshold, args.frames, args.show_camera
                     )
-                    write_result(profile, score, frames,
-                                 "firebase_face_recognition_listener.py",
-                                 args.discord_webhook, args.notify_known, not args.no_sound)
-                    print(f"Result={profile['name']} MSV={profile.get('student_id', '')} score={score} frames={frames}")
+                    if not was_cancelled:
+                        write_result(profile, score, frames,
+                                     "firebase_face_recognition_listener.py",
+                                     args.discord_webhook, args.notify_known, not args.no_sound)
+                        print(f"Result={profile['name']} MSV={profile.get('student_id', '')} score={score} frames={frames}")
+                    else:
+                        print("[TRIGGER] Scan cancelled because obstacle was removed.")
                 except Exception as exc:
                     write_result({"name": "Unknown", "student_id": ""}, None, 0,
                                  f"error: {exc}", args.discord_webhook, True, not args.no_sound)

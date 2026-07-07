@@ -321,6 +321,15 @@ void loop() {
 
       if (lastDistance <= PERSON_THRESHOLD_CM) {
         requestCaptureIfNeeded();
+      } else {
+        if (captureRequested) {
+          captureRequested = false;
+          Firebase.RTDB.setBool(&fbdo, capturePath.c_str(), false);
+          Firebase.RTDB.setString(&fbdo, messagePath.c_str(), "Capture cancelled");
+          lcdLine(0, "System ready");
+          lcdLine(1, "Waiting...");
+          Serial.println("capture_request=false (obstacle removed)");
+        }
       }
     }
   }
