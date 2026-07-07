@@ -1,0 +1,210 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[vietnamese]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{tikz}
+\usetikzlibrary{shapes.geometric, arrows, positioning}
+
+\geometry{margin=2.5cm}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\tikzstyle{startstop} = [rectangle, rounded corners, minimum width=3cm, minimum height=1cm,text centered, draw=black, fill=red!30]
+\tikzstyle{process} = [rectangle, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=orange!30]
+\tikzstyle{decision} = [diamond, aspect=2, minimum width=3cm, minimum height=1cm, text centered, draw=black, fill=green!30]
+\tikzstyle{arrow} = [thick,->,>=stealth]
+
+\title{TÀI LIỆU THIẾT KẾ HỆ THỐNG KHÓA CỬA TỰ ĐỘNG NHẬN DIỆN KHUÔN MẶT\\(AI FACE DOOR LOCK SYSTEM)}
+\author{Phát triển bởi: chinhnguyen2004 \& Antigravity AI}
+\date{Ngày 7 tháng 7 năm 2026}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Giới thiệu hệ thống (Introduction)}
+Hệ thống khóa cửa tự động nhận diện khuôn mặt thời gian thực là một ứng dụng IoT tích hợp Trí tuệ nhân tạo (AI). Hệ thống cho phép tự động kiểm soát truy cập cửa ra vào thông qua việc đối sánh khuôn mặt người đứng trước cửa với cơ sở dữ liệu sinh viên đã được đăng ký trước.
+
+Hệ thống bao gồm hai thành phần cốt lõi:
+\begin{enumerate}
+    \item \textbf{Mạch điều khiển biên (Edge Controller - ESP8266):} Thực hiện nhiệm vụ đo khoảng cách phát hiện người bằng cảm biến siêu âm, điều khiển động cơ Servo đóng/mở cửa, bật/tắt các đèn LED trạng thái (Đỏ/Trắng) và hiển thị thông tin lên màn hình LCD.
+    \item \textbf{Máy chủ xử lý AI (PC Processing Unit):} Nhận tín hiệu kích hoạt từ cơ sở dữ liệu, khởi chạy camera ghi nhận hình ảnh trực quan, chạy mô hình học sâu (Deep Learning) để nhận diện khuôn mặt, cập nhật kết quả lên cơ sở dữ liệu thời gian thực và đẩy thông báo cảnh báo về phòng điều hành qua Discord Webhook.
+\end{enumerate}
+
+\newpage
+\section{Kiến trúc hệ thống (System Architecture)}
+
+Dữ liệu được đồng bộ hóa liên tục giữa các thành phần thông qua kiến trúc phân tán kết nối đám mây:
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[node distance=2cm]
+\node (sonar) [startstop] {Cảm biến siêu âm};
+\node (esp) [process, below of=sonar, yshift=-0.5cm] {ESP8266 Edge Node};
+\node (rtdb) [process, right of=esp, xshift=4cm] {Firebase RTDB};
+\node (pc) [process, below of=rtdb, yshift=-1cm] {PC AI Engine (Python)};
+\node (cam) [startstop, left of=pc, xshift=-4cm] {Camera/Webcam};
+\node (discord) [startstop, right of=pc, xshift=4cm] {Discord Webhook};
+\node (actuators) [startstop, left of=esp, xshift=-4cm] {Servo \& LED D3/D4};
+
+\draw [arrow] (sonar) -- (esp);
+\draw [arrow] (esp) -- node[anchor=south] {HTTPS POST} (rtdb);
+\draw [arrow] (rtdb) -- node[anchor=left] {REST Polling} (pc);
+\draw [arrow] (cam) -- (pc);
+\draw [arrow] (pc) -- node[anchor=north] {HTTPS PUT} (rtdb);
+\draw [arrow] (pc) -- node[anchor=south] {JSON Alert} (discord);
+\draw [arrow] (rtdb) -- node[anchor=north] {HTTPS GET} (esp);
+\draw [arrow] (esp) -- (actuators);
+\end{tikzpicture}
+\caption{Sơ đồ luồng truyền thông và kiến trúc hệ thống}
+\end{figure}
+
+\section{Sơ đồ nguyên lý \& Đấu nối phần cứng (Hardware Schematic)}
+
+\subsection{Sơ đồ ánh xạ chân (Pin Mapping)}
+Hệ thống sử dụng board NodeMCU ESP8266 Lolin v3 với sơ đồ đấu nối dây như sau:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Linh kiện} & \textbf{Chân Linh kiện} & \textbf{Chân ESP8266} & \textbf{Chế độ chân} \\ \midrule
+Cảm biến siêu âm HC-SR04 & Trig & D5 (GPIO14) & OUTPUT \\
+                         & Echo & D6 (GPIO12) & INPUT \\
+Động cơ Servo MG90S      & Signal (Cam) & D0 (GPIO16) & OUTPUT \\
+Màn hình LCD 16x2 I2C    & SCL & D1 (GPIO5) & OUTPUT \\
+                         & SDA & D2 (GPIO4) & OUTPUT \\
+LED Đỏ (Cảnh báo người lạ) & Cực dương (+) & D3 (GPIO0) & OUTPUT \\
+LED Trắng (Thành công)   & Cực dương (+) & D4 (GPIO2) & OUTPUT \\
+\bottomrule
+\end{tabular}
+\caption{Bảng sơ đồ đấu nối chân phần cứng}
+\end{table}
+
+\subsection{Giải pháp chống nhiễu cho động cơ Servo (Dynamic Attach/Detach)}
+Việc chạy kết nối bảo mật SSL (HTTPS) tiêu tốn rất nhiều chu kỳ CPU của ESP8266 và chặn các ngắt ngầm. Do vi điều khiển ESP8266 tạo xung điều khiển Servo bằng phần mềm, việc chặn ngắt này làm méo dạng xung gây ra hiện tượng Servo tự động quay tròn liên tục hoặc rung lắc tỏa nhiệt.
+
+\textbf{Giải pháp phần mềm:} Động cơ chỉ được cấp xung điều khiển khi thực thi lệnh mở/đóng cửa và lập tức giải phóng ngay sau khi hoàn thành:
+\begin{lstlisting}[language=C++]
+void openDoor() {
+  if (!doorOpen) {
+    doorServo.attach(SERVO_PIN); // Cấp xung điều khiển
+    doorServo.write(SERVO_OPEN_DEG);
+    delay(600);                  // Đợi Servo quay xong
+    doorServo.detach();          // Ngắt xung để chống rung giật
+    doorOpen = true;
+    // Bật đèn Trắng (D4), tắt đèn Đỏ (D3)
+    digitalWrite(LED_SUCCESS_PIN, HIGH);
+    digitalWrite(LED_FAIL_PIN, LOW);
+  }
+}
+\end{lstlisting}
+
+\newpage
+\section{Các giao thức truyền thông (Communication Protocols)}
+
+\subsection{Firebase Realtime Database REST API}
+Để tránh việc Google Cloud thu hồi tự động các khoá tài khoản dịch vụ (`admin_firebase.json`) khi dự án chuyển sang chế độ Công khai (Public), hệ thống sử dụng giao thức **REST API** thuần qua HTTPS tích hợp cùng **Database Secret (Legacy Token)** làm phương thức xác thực:
+\begin{equation}
+\text{URL truy vấn} = \text{DATABASE\_URL} + \text{/path.json?auth=} + \text{DATABASE\_SECRET}
+\end{equation}
+
+\begin{itemize}
+    \item \textbf{Phương thức GET:} Đọc giá trị hiện thời từ cơ sở dữ liệu.
+    \item \textbf{Phương thức PUT:} Thiết lập ghi đè giá trị (ví dụ: cập nhật kết quả nhận diện).
+    \item \textbf{Phương thức PATCH:} Cập nhật một nhóm các trường dữ liệu mà không ghi đè toàn bộ nút cha.
+    \item \textbf{Phương thức POST:} Tạo nút con mới kèm định danh duy nhất tự sinh (sử dụng cho ghi nhật ký lịch sử `/history`).
+\end{itemize}
+
+\subsection{Tối ưu hóa RAM cho kết nối BearSSL trên ESP8266}
+Kết nối HTTPS sử dụng bộ thư viện BearSSL yêu cầu bộ nhớ đệm handshake rất lớn ($\approx 20-30\text{ KB}$). Để tránh lỗi tràn bộ nhớ (Out of Memory - OOM) gây sập kết nối trên ESP8266, bộ đệm phản hồi của Firebase được giới hạn cứng ở mức `512` bytes:
+\begin{lstlisting}[language=C++]
+fbdo.setResponseSize(512); // Tối ưu bộ nhớ đệm
+\end{lstlisting}
+
+\subsection{Discord Webhook Alert Protocol}
+Khi phát hiện khuôn mặt, máy chủ AI gửi yêu cầu HTTPS POST chứa nội dung định dạng JSON (Rich Embed) tới Discord Webhook URL. Cấu trúc payload JSON:
+\begin{lstlisting}[language=json]
+{
+  "content": "📢 🚨 **CẢNH BÁO NGƯỜI LẠ**",
+  "embeds": [{
+    "title": "📢 🚨 Cảnh báo người lạ",
+    "color": 16726784,
+    "description": "🔒 Phát hiện khuôn mặt chưa đăng ký. Cửa vẫn khóa.",
+    "fields": [
+      {"name": "👤 Danh tính", "value": "Unknown", "inline": true},
+      {"name": "📊 Độ tin cậy", "value": "0.084", "inline": true}
+    ]
+  }]
+}
+\end{lstlisting}
+
+\newpage
+\section{Mô hình Trí tuệ nhân tạo (AI Models)}
+
+\subsection{Mô hình phát hiện khuôn mặt YuNet}
+YuNet là một mô hình mạng thần kinh nhân tạo (CNN) tối ưu cao chạy bằng mô-đun DNN của OpenCV. 
+\begin{itemize}
+    \item \textbf{Đặc điểm:} Phát hiện nhanh, chính xác cao các điểm mốc trên khuôn mặt (mắt, mũi, miệng) kể cả trong điều kiện thiếu sáng hoặc khuôn mặt bị nghiêng góc lớn.
+    \item \textbf{Kích thước đầu vào:} Tự động co giãn theo kích thước khung hình camera:
+    \begin{equation}
+    \text{InputSize} = (\text{Width}_{\text{frame}}, \text{Height}_{\text{frame}})
+    \end{equation}
+\end{itemize}
+
+\subsection{Mô hình nhận diện và trích xuất đặc trưng SFace}
+SFace được sử dụng để trích xuất một vector đặc trưng biểu diễn khuôn mặt (Face Embedding) gồm **128 chiều** từ ảnh khuôn mặt đã được căn chỉnh và cắt cúp (Aligned \& Cropped, kích thước $112 \times 112$ pixels).
+
+\subsection{Thuật toán so khớp (Cosine Similarity)}
+Độ tương đồng giữa ảnh khuôn mặt thu được từ camera ($\mathbf{a}$) và ảnh khuôn mặt mẫu lưu trữ trong cơ sở dữ liệu ($\mathbf{b}$) được tính toán dựa trên độ tương đồng Cosine:
+\begin{equation}
+\text{Cosine Similarity} = \cos(\theta) = \frac{\mathbf{a} \cdot \mathbf{b}}{\|\mathbf{a}\| \|\mathbf{b}\|} = \frac{\sum_{i=1}^{128} a_i b_i}{\sqrt{\sum_{i=1}^{128} a_i^2} \sqrt{\sum_{i=1}^{128} b_i^2}}
+\end{equation}
+Ngưỡng chấp nhận thiết lập tối ưu: $\text{Cosine Similarity} \ge 0.36$. Mọi giá trị nhỏ hơn ngưỡng này đều được coi là người lạ (\textbf{Unknown}).
+
+\subsection{Thuật toán Biểu quyết đa khung hình trong chế độ Độc lập}
+Để đảm bảo tính ổn định và chống báo động giả khi camera quét liên tục (chế độ Standalone), hệ thống áp dụng thuật toán tích lũy và biểu quyết 5 khung hình:
+\begin{enumerate}
+    \item Khi phát hiện khuôn mặt, trích xuất đặc trưng và so khớp nhãn của từng khung hình đơn lẻ.
+    \item Đẩy nhãn của khung hình đó vào hàng đợi tích lũy (tối đa 5 khung hình).
+    \item Khi hàng đợi đủ 5 phần tử, thực hiện biểu quyết đa số:
+    \begin{equation}
+    \text{Kết quả cuối cùng} = \text{mode}(\text{hàng đợi})
+    \end{equation}
+    \item Nếu trong vòng 2.0 giây không phát hiện thấy bất kỳ khuôn mặt nào, toàn bộ hàng đợi tích lũy sẽ được xóa sạch (reset) để chuẩn bị cho lượt quét của người kế tiếp.
+\end{enumerate}
+
+\end{document}
