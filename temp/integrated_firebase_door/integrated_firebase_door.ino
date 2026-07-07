@@ -47,7 +47,7 @@ const uint8_t LED_FAIL_PIN    = D3; // Đèn đỏ sáng khi không phải/unkno
 // Behavior config
 const String DEVICE_ID = "esp01";
 const float PERSON_THRESHOLD_CM = 50.0;
-const unsigned long SENSOR_INTERVAL_MS = 700;
+const unsigned long SENSOR_INTERVAL_MS = 300;
 const unsigned long FIREBASE_INTERVAL_MS = 1000;
 const unsigned long RECOGNITION_TIMEOUT_MS = 15000;
 const unsigned long DOOR_OPEN_MS = 500;
@@ -82,6 +82,7 @@ unsigned long lastSensorMs = 0;
 unsigned long lastFirebaseMs = 0;
 String lastResultTimestamp = "";
 float lastDistance = -1.0;
+int consecutiveOutCount = 0;
 
 void lcdLine(uint8_t row, String text) {
   if (!lcdFound || lcd == nullptr) return;
@@ -320,15 +321,20 @@ void loop() {
       }
 
       if (lastDistance <= PERSON_THRESHOLD_CM) {
+        consecutiveOutCount = 0; // Reset bộ đếm nếu phát hiện vật cản
         requestCaptureIfNeeded();
       } else {
         if (captureRequested) {
-          captureRequested = false;
-          Firebase.RTDB.setBool(&fbdo, capturePath.c_str(), false);
-          Firebase.RTDB.setString(&fbdo, messagePath.c_str(), "Capture cancelled");
-          lcdLine(0, "System ready");
-          lcdLine(1, "Waiting...");
-          Serial.println("capture_request=false (obstacle removed)");
+          consecutiveOutCount++;
+          if (consecutiveOutCount >= 5) { // Cần 5 lần liên tiếp đo > 50cm (~1.5 giây) mới huỷ
+            consecutiveOutCount = 0;
+            captureRequested = false;
+            Firebase.RTDB.setBool(&fbdo, capturePath.c_str(), false);
+            Firebase.RTDB.setString(&fbdo, messagePath.c_str(), "Capture cancelled");
+            lcdLine(0, "System ready");
+            lcdLine(1, "Waiting...");
+            Serial.println("capture_request=false (obstacle removed)");
+          }
         }
       }
     }
