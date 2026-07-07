@@ -31,7 +31,7 @@ goto menu
 :run_listener
 cls
 echo [MAIN SYSTEM] Starting face recognition and Discord...
-"C:\Users\Admin\AppData\Local\Programs\Python\Python311\python.exe" -u firebase_face_recognition_listener.py --camera 0 --threshold 0.42 --frames 5 --discord-webhook "%DISCORD_WEBHOOK_URL%" --notify-known
+"C:\Users\Admin\AppData\Local\Programs\Python\Python311\python.exe" -u firebase_face_recognition_listener.py --camera 0 --threshold 0.42 --frames 5 --show-camera --discord-webhook "%DISCORD_WEBHOOK_URL%" --notify-known
 pause
 goto menu
 
