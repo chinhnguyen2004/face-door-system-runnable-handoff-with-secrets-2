@@ -50,7 +50,7 @@ const float PERSON_THRESHOLD_CM = 50.0;
 const unsigned long SENSOR_INTERVAL_MS = 300;
 const unsigned long FIREBASE_INTERVAL_MS = 1000;
 const unsigned long RECOGNITION_TIMEOUT_MS = 15000;
-const unsigned long DOOR_OPEN_MS = 500;
+const unsigned long DOOR_OPEN_MS = 800;
 const unsigned long ECHO_TIMEOUT_US = 30000UL;
 
 const int SERVO_CLOSED_DEG = 0;
