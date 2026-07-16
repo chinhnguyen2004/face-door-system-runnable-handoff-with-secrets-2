@@ -340,18 +340,21 @@ void loop() {
     }
   }
 
-  // Tần suất gửi tin Firebase: 150ms khi đang quét nhận diện, 2500ms khi nhàn rỗi (tiết kiệm băng thông)
-  unsigned long firebase_interval = captureRequested ? 150 : 2500;
+  // Tần suất gửi nhịp tim/khoảng cách nhàn rỗi: 3000ms
+  const unsigned long STATUS_UPDATE_INTERVAL = 3000;
+  static unsigned long lastStatusUpdateMs = 0;
 
-  if (now - lastFirebaseMs >= firebase_interval) {
-    lastFirebaseMs = now;
+  // 1. Chỉ cập nhật trạng thái khoảng cách và nhịp tim lên Firebase định kỳ 3 giây để tránh làm nghẽn mạng
+  if (!captureRequested && now - lastStatusUpdateMs >= STATUS_UPDATE_INTERVAL) {
+    lastStatusUpdateMs = now;
     if (lastDistance >= 0) Firebase.RTDB.setFloat(&fbdo, distancePath.c_str(), lastDistance);
     Firebase.RTDB.setInt(&fbdo, lastSeenPath.c_str(), (int)now);
-    
-    // Chỉ truy vấn kết quả nhận diện khi đang thực sự yêu cầu quét mặt
-    if (captureRequested) {
-      checkRecognitionResult();
-    }
+  }
+
+  // 2. Khi đang trong trạng thái quét mặt, chỉ tập trung đọc kết quả nhận diện mỗi 150ms (không ghi để tránh nghẽn)
+  if (captureRequested && now - lastFirebaseMs >= 150) {
+    lastFirebaseMs = now;
+    checkRecognitionResult();
   }
 
   if (doorOpen && now - doorOpenedMs >= DOOR_OPEN_MS) {

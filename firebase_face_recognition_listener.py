@@ -633,7 +633,7 @@ def main() -> None:
                     print(f"Recognition error: {exc}")
                 finally:
                     flag_ref.set(False)
-            time.sleep(0.5)
+            time.sleep(0.1)
     except KeyboardInterrupt:
         db.reference("/status/pc_listener").update({
             "running": False,
